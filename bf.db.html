@@ -1,0 +1,147 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+import {
+  getAuth,
+  onAuthStateChanged,
+  signOut,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile
+} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  query,
+  orderBy,
+  getDocs,
+  serverTimestamp
+} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+import { firebaseConfig } from "./firebase-config.js";
+
+const isConfigured = firebaseConfig.apiKey !== "YOUR_API_KEY" &&
+  firebaseConfig.projectId !== "YOUR_PROJECT_ID" &&
+  firebaseConfig.appId !== "YOUR_APP_ID";
+
+let app = null;
+let auth = null;
+let db = null;
+
+if (isConfigured) {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+}
+
+const localUser = () => JSON.parse(localStorage.getItem("bodyForceUser") || "null");
+const localProgress = () => JSON.parse(localStorage.getItem("bodyForceProgress") || "null");
+
+async function saveUserProfile(data) {
+  if (!auth?.currentUser || !db) {
+    localStorage.setItem("bodyForceUser", JSON.stringify(data));
+    return data;
+  }
+  const ref = doc(db, "users", auth.currentUser.uid);
+  await setDoc(ref, {
+    ...data,
+    uid: auth.currentUser.uid,
+    email: auth.currentUser.email || data.email || "",
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+  localStorage.setItem("bodyForceUser", JSON.stringify(data));
+  return data;
+}
+
+async function getUserProfile() {
+  if (!auth?.currentUser || !db) return localUser();
+  const snap = await getDoc(doc(db, "users", auth.currentUser.uid));
+  if (!snap.exists()) return localUser();
+  const data = snap.data();
+  localStorage.setItem("bodyForceUser", JSON.stringify(data));
+  return data;
+}
+
+async function saveProgress(progress) {
+  localStorage.setItem("bodyForceProgress", JSON.stringify(progress));
+  if (!auth?.currentUser || !db) return progress;
+  const ref = doc(db, "users", auth.currentUser.uid);
+  await setDoc(ref, { progress, updatedAt: serverTimestamp() }, { merge: true });
+  const historyRef = collection(db, "users", auth.currentUser.uid, "progressHistory");
+  const latest = progress.history?.[progress.history.length - 1];
+  if (latest) {
+    await addDoc(historyRef, { ...latest, createdAt: serverTimestamp() });
+  }
+  return progress;
+}
+
+async function getProgress() {
+  if (!auth?.currentUser || !db) return localProgress();
+  const snap = await getDoc(doc(db, "users", auth.currentUser.uid));
+  const data = snap.exists() ? snap.data().progress : null;
+  if (data) localStorage.setItem("bodyForceProgress", JSON.stringify(data));
+  return data || localProgress();
+}
+
+async function saveAnalysis(data) {
+  if (!auth?.currentUser || !db) return data;
+  await setDoc(doc(db, "users", auth.currentUser.uid), {
+    latestAnalysis: { ...data, updatedAt: new Date().toISOString() },
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+  return data;
+}
+
+async function savePlan(type, plan) {
+  if (!auth?.currentUser || !db) return plan;
+  await setDoc(doc(db, "users", auth.currentUser.uid), {
+    plans: { [type]: plan },
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+  return plan;
+}
+
+async function logout() {
+  localStorage.removeItem("bodyForceUser");
+  localStorage.removeItem("bodyForceProgress");
+  if (auth) await signOut(auth);
+  window.location.href = "index.html";
+}
+
+function waitForAuth() {
+  if (!auth) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const unsub = onAuthStateChanged(auth, user => {
+      unsub();
+      resolve(user);
+    });
+  });
+}
+
+window.BF = {
+  configured: isConfigured,
+  auth,
+  db,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+  saveUserProfile,
+  getUserProfile,
+  saveProgress,
+  getProgress,
+  saveAnalysis,
+  savePlan,
+  logout,
+  waitForAuth,
+  get currentUser() { return auth?.currentUser || null; }
+};
+
+if (auth) {
+  onAuthStateChanged(auth, async user => {
+    if (user) {
+      try { await getUserProfile(); } catch (e) { console.warn("Profile sync failed", e); }
+    }
+  });
+}
